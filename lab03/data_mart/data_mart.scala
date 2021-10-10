@@ -1,167 +1,222 @@
+import com.typesafe.scalalogging.Logger
+import org.apache.commons.cli.{CommandLine, Options, PosixParser}
+import org.apache.spark.sql.functions.{broadcast, col, count, explode, expr, lit, udf, when}
+
 import java.net.{URL, URLDecoder}
-import scala.util.Try
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.functions._
+import scala.collection.immutable.HashMap
+import org.postgresql.Driver
+import org.apache.spark.sql.cassandra._
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.elasticsearch.spark._
+import org.apache.spark.sql._
 import org.apache.spark.sql.types.DataType
-import com.datastax.spark.connector._
-import org.apache.spark.sql.cassandra._
 
-object data_mart {
-    def main(args: Array[String]): Unit = {
+import java.io.FileReader
+import java.sql.{Connection, DriverManager, Statement}
+import java.util.Properties
 
-        val spark = SparkSession.builder().appName("lab03")
-      .config("spark.cassandra.connection.host", "10.0.0.5")
-      .config("spark.cassandra.connection.port", "9042")
-      .config("spark.cassandra.output.consistency.level", "ANY")
-      .config("spark.cassandra.input.consistency.level", "ONE")
-      .getOrCreate()
 
-    import spark.implicits._
+object data_mart extends App {
+  case class CsServer( host:String, port:Int)
+  val labName = "lab-03-xa0c"
+  @transient lazy val logger = Logger(labName)
+  val props:Properties = new Properties()
+  val option:Options = new Options
+  var cmd:CommandLine = null
+  try {
+    DriverManager.registerDriver(new org.postgresql.Driver)
+    option.addOption("p", "run-property", true, "run property file")
+    cmd = (new PosixParser).parse(option, args)
+  } catch {
+    case e: Exception  => {
+      logger.error("Unable to parse command-line options: " + e.getMessage)
+      e.printStackTrace()
+    }
+  }
 
-    val options = Map(
-        "table" -> "clients",
-        "keyspace" -> "labdata"
+  // Load property
+  logger.info(s"run-property=${cmd.getOptionValue("run-property")}")
+  props.load( new FileReader( cmd.getOptionValue("run-property", "/data/home/timofey.melnikov/labs/lab03.property") ) )
+  // HDFS
+  val hdfsSourceWebClik = props.getProperty("hdfs.source.webclik")
+  logger.info(s"hdfs.source=${hdfsSourceWebClik}")
+
+  // cassandra
+  val csServer = CsServer (props.getProperty("cs.host"), props.getProperty("cs.port").toInt)
+  val csTClients:HashMap[String,String] = HashMap( "keyspace"->"labdata", "table"->"clients")
+  logger.info(s"cs.host=${csServer.host}:${csServer.port}")
+
+  // elastic
+  val esOpts:HashMap[String,String] = HashMap(
+    "es.nodes" -> props.getProperty("es.nodes")
+    , "es.nodes.wan.only" -> "true"
+    , "es.net.http.auth.user" -> props.getProperty("es.usename")
+    , "es.net.http.auth.pass" -> props.getProperty("es.password")
+  )
+  logger.info(s"es.host=${esOpts("es.nodes")}")
+
+  val esIndex = "visits"
+
+  // postgre
+  val pgOpts:HashMap[String,String] = HashMap(
+    "driver" -> "org.postgresql.Driver"
+    , "user" -> props.getProperty("pg.usename")
+    , "password" -> props.getProperty("pg.password")
+  )
+  logger.info(s"es.user=${pgOpts("user")}")
+
+  val pgSourceUrl:String = props.getProperty("pg.jdbc.url") + "/" + "labdata"
+  val pgTargetUrl:String = props.getProperty("pg.jdbc.url") + "/" + pgOpts("user")
+
+  val pgTblDomain:HashMap[String,String]  =
+    HashMap ( "url" -> pgSourceUrl
+      , "dbtable" -> "domain_cats"
+    )
+  val pgTblDataMarket:HashMap[String,String]  =
+    HashMap ( "url" -> pgTargetUrl
+      , "dbtable" -> "clients"
     )
 
-    //casandra
-    val client = spark.read.format("org.apache.spark.sql.cassandra").options(options).load()
-      .select('uid, 'gender, when('age >= 18 && 'age <= 24, "18-24")
-        .when('age >= 25 && 'age <= 34, "25-34")
-        .when('age >= 35 && 'age <= 44, "35-44")
-        .when('age >= 45 && 'age <= 54, "45-54")
-        .when('age >= 55, ">=55").alias("age_cat")
+  // config sparck
+
+  @transient lazy val pgTargetDb:Connection = DriverManager.getConnection(pgTargetUrl, pgOpts("user"), pgOpts("password"))
+  val spark = SparkSession
+    .builder
+    .appName(labName)
+    .getOrCreate()
+
+  spark.conf.set(s"spark.cassandra.connection.host", csServer.host)
+  spark.conf.set(s"spark.cassandra.connection.port", csServer.port)
+
+  // UDF
+  def url_domain_2level:UserDefinedFunction = udf(( url : String)  => {
+    val urloption :URL = try {
+      new URL(URLDecoder.decode(url, "utf-8"))
+    } catch {
+      case e: Exception => null
+    }
+
+    if ( urloption != null ) {
+      val host :String = urloption.getHost match {
+        case x: String if x.startsWith("www.") => x.substring(4)
+        case x: String => x
+      }
+      host  //.split('.').takeRight(2).mkString(".")
+      // пробывать домены с разными условиями
+    } else {
+      null
+    }
+
+  })
+  private def targetExecureDDL( sql : String) = {
+    val pgTargetStatement:Statement = pgTargetDb.createStatement()
+    pgTargetStatement.execute( sql )
+    pgTargetStatement.close()
+
+  }
+
+  // postgre target
+  lazy val pgDataMarket =  spark
+    .read
+    .format("jdbc")
+    .options(pgOpts)
+    .options(pgTblDataMarket)
+    .load()
+
+
+  lazy val csClients =  spark
+    .read
+    .format("org.apache.spark.sql.cassandra")
+    .options( csTClients )
+    .load()
+    .where(col("age")>=18)
+    .withColumn("age_cat"
+      ,  when( col("age").between(18,24),"18-24")
+        .when( col("age").between(25,34),"25-34")
+        .when( col("age").between(35,44),"35-44")
+        .when( col("age").between(45,44),"45-54")
+        .otherwise(">=55")
+    )
+    .drop("age")
+
+  lazy val esShops =  spark
+    .read.format("org.elasticsearch.spark.sql")
+    .options( esOpts)
+    .load( esIndex )
+    //.where(col("event_type")==="buy")
+    .withColumn("shop_name"
+      , functions.concat(
+        lit("shop_")
+        , functions.regexp_replace(
+          functions.lower( col("category") )
+          , "[ -]"
+          , "_"
+        )
       )
-
-    val options2 = Map(
-        "es.nodes" -> "10.0.0.5:9200",
-        "es.net.http.auth.user" -> "timofey.melnikov",
-        "es.net.http.auth.pass" -> "",
-        "es.batch.write.refresh" -> "false",
-        "es.nodes.wan.only" -> "true"
     )
+    .select("uid", "shop_name")
 
-    //elastic
-    val df = spark.read.format("es").options(options2).load("visits")
 
-    val df2 = df.filter('uid.isNotNull)
-      .select('uid, concat(lit("shop_"), lower(regexp_replace('category, "-", "_"))).alias("category"))
-      .groupBy('uid, 'category)
-      .agg(count("*").alias("cnt_visits"))
-      .groupBy('uid).pivot("category").agg(sum("cnt_visits"))
-      .na.fill(0)
+  lazy val hdfsWebClik =  spark
+    .read.format("json")
+    .load( hdfsSourceWebClik )
+    .where(col("uid").isNotNull)
+    .select(col("uid"), explode(col("visits")).as("obj"))
+    .withColumn("domain", url_domain_2level(col("obj.url")))
+    .select(col("uid"), col("domain"), col("obj.url").as("url"))
 
-    val clients_shop = client.join(df2, "uid" :: Nil, "left")
-      .select(client("uid"),
-          'gender,
-          'age_cat,
-          'shop_cameras,
-          'shop_clothing,
-          'shop_computers,
-          'shop_cosmetics,
-          'shop_entertainment_equipment,
-          'shop_everyday_jewelry,
-          'shop_house_repairs_paint_tools,
-          'shop_household_appliances,
-          'shop_household_furniture,
-          'shop_kitchen_appliances,
-          'shop_kitchen_utensils,
-          'shop_luggage,
-          'shop_mobile_phones,
-          'shop_shoes,
-          'shop_sports_equipment,
-          'shop_toys
-      ).na.fill(0)
+  lazy val pgWebCategory =  spark
+    .read.format("jdbc")
+    .options(pgOpts)
+    .options(pgTblDomain)
+    .load()
+    .withColumn("cat_name"
+      , functions.concat(
+        lit("web_")
+        , functions.regexp_replace(
+          functions.lower( col("category") )
+          , "[ -]"
+          , "_"
+        )
+      )
+    )
+    .select("domain", "cat_name")
 
-    //hdfs
-    val raw_logs = spark.read.json("/labs/laba03/weblogs.json")
-      .select($"uid", explode($"visits"))
-      .select($"uid", $"col.url")
 
-    val urls = udf { (url: String) => Try(new URL(url).getHost).toOption }
+  lazy val web_result =
+    hdfsWebClik
+      .join(broadcast(pgWebCategory), Seq("domain"), "inner")
+      .select("uid", "url", "domain", "cat_name")
+      .groupBy(col("uid"))
+      .pivot("cat_name")
+      .agg(count("uid"))
 
-    val logs = raw_logs.filter(col("url").isNotNull)
-      .withColumn("urlClean", urls(col("url")))
-      .filter(col("urlClean").isNotNull)
-      .withColumn("url_domain", regexp_replace(col("urlClean"), "^www\\.", ""))
-      .select('uid, 'url_domain)
 
-    //postgresql
-    val jdbcUrl = "jdbc:postgresql://10.0.0.5:5432/labdata?user=timofey_melnikov&password="
 
-    val dfjson = spark
-      .read
-      .format("jdbc")
-      .option("url", jdbcUrl)
-      .option("driver", "org.postgresql.Driver")
-      .option("dbtable", "domain_cats")
-      .load()
+  lazy  val shop_result =
+    esShops
+      .groupBy(col("uid"))
+      .pivot("shop_name")
+      .agg(count("uid"))
 
-    val uid_cust = logs.join(dfjson, logs("url_domain") === dfjson("domain"), "inner")
-      .select('uid, concat(lit("web_"), 'category).alias("category"))
+  spark.conf.set("spark.sql.autoBroadcastJoinThreshold", -1)
+  lazy val result = csClients
+    .join(shop_result,Seq("uid"), "left")
+    .join(web_result, Seq("uid"), "left")
+    .na.fill(0)
+    .repartition(10)
 
-    val df3 = uid_cust.filter('uid.isNotNull)
-      .groupBy('uid, 'category)
-      .agg(count("*").alias("cnt_visits"))
-      .groupBy('uid).pivot("category").agg(sum("cnt_visits"))
-      .na.fill(0)
+  targetExecureDDL("DROP TABLE IF EXISTS clients")
 
-    val clients = clients_shop.join(df3, "uid" :: Nil, "left")
-      .select(clients_shop("uid"),
-          'gender,
-          'age_cat,
-          'shop_cameras,
-          'shop_clothing,
-          'shop_computers,
-          'shop_cosmetics,
-          'shop_entertainment_equipment,
-          'shop_everyday_jewelry,
-          'shop_house_repairs_paint_tools,
-          'shop_household_appliances,
-          'shop_household_furniture,
-          'shop_kitchen_appliances,
-          'shop_kitchen_utensils,
-          'shop_luggage,
-          'shop_mobile_phones,
-          'shop_shoes,
-          'shop_sports_equipment,
-          'shop_toys,
-          'web_arts_and_entertainment,
-          'web_autos_and_vehicles,
-          'web_beauty_and_fitness,
-          'web_books_and_literature,
-          'web_business_and_industry,
-          'web_career_and_education,
-          'web_computer_and_electronics,
-          'web_finance,
-          'web_food_and_drink,
-          'web_gambling,
-          'web_games,
-          'web_health,
-          'web_home_and_garden,
-          'web_internet_and_telecom,
-          'web_law_and_government,
-          'web_news_and_media,
-          'web_pets_and_animals,
-          'web_recreation_and_hobbies,
-          'web_reference,
-          'web_science,
-          'web_shopping,
-          'web_sports,
-          'web_travel
-      ).na.fill(0)
+  result
+    .write
+    .format("jdbc")
+    .options(pgOpts)
+    .options(pgTblDataMarket)
+    .mode(SaveMode.Overwrite)
+    .save()
 
-    clients.write
-      .format("jdbc")
-      .option("url", "jdbc:postgresql://10.0.0.5:5432/timofey_melnikov")
-      .option("dbtable", "clients")
-      .option("user", "timofey_melnikov")
-      .option("password", "")
-      .option("driver", "org.postgresql.Driver")
-      .mode("overwrite")
-      .save()
-
-    spark.stop()
-}
+  targetExecureDDL("GRANT SELECT ON TABLE clients TO labchecker2")
+  // Finall
+  spark.close()
 }
