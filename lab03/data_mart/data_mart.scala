@@ -109,51 +109,13 @@ object data_mart {
       .select(clients_shop("uid"),
         'gender,
         'age_cat,
-        'shop_cameras,
-        'shop_clothing,
-        'shop_computers,
-        'shop_cosmetics,
-        'shop_entertainment_equipment,
-        'shop_everyday_jewelry,
-        'shop_house_repairs_paint_tools,
-        'shop_household_appliances,
-        'shop_household_furniture,
-        'shop_kitchen_appliances,
-        'shop_kitchen_utensils,
-        'shop_luggage,
-        'shop_mobile_phones,
-        'shop_shoes,
-        'shop_sports_equipment,
-        'shop_toys,
-        'web_arts_and_entertainment,
-        'web_autos_and_vehicles,
-        'web_beauty_and_fitness,
-        'web_books_and_literature,
-        'web_business_and_industry,
-        'web_career_and_education,
-        'web_computer_and_electronics,
-        'web_finance,
-        'web_food_and_drink,
-        'web_gambling,
-        'web_games,
-        'web_health,
-        'web_home_and_garden,
-        'web_internet_and_telecom,
-        'web_law_and_government,
-        'web_news_and_media,
-        'web_pets_and_animals,
-        'web_recreation_and_hobbies,
-        'web_reference,
-        'web_science,
-        'web_shopping,
-        'web_sports,
-        'web_travel
+        'shop_cameras
       ).na.fill(0)
 
     clients.write
       .format("jdbc")
       .option("url", "jdbc:postgresql://10.0.0.5:5432/timofey_melnikov")
-      .option("dbtable", "clients")
+      .option("dbtable", "clients3")
       .option("user", "timofey_melnikov")
       .option("password", "D5QMspzo")
       .option("driver", "org.postgresql.Driver")
