@@ -11,9 +11,15 @@ object filter extends App {
 
   import spark.implicits._
 
-  val ofs = spark.conf.get("spark.filter.offset")
+  //val ofs = spark.conf.get("spark.filter.offset")
   val topic = spark.conf.get("spark.filter.topic_name")
-  val offset = if(ofs != "earliest") s"""{"$topic":{"0":$ofs}}""" else "earliest"
+  //val offset = if(ofs != "earliest") s"""{"$topic":{"0":$ofs}}""" else "earliest"
+
+val offset = spark.conf.get("spark.filter.offset")
+offset = if (offset != "ealiest") {
+  offset = s"""{"$topic":{"0":$offset}}"""
+}
+
   val dir = spark.conf.get("spark.filter.output_dir_prefix")
 
   val kafkaParams = Map(
