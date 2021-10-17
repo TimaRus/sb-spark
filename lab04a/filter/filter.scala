@@ -14,13 +14,12 @@ object filter extends App {
   //val ofs = spark.conf.get("spark.filter.offset")
   val topic = spark.conf.get("spark.filter.topic_name")
   //val offset = if(ofs != "earliest") s"""{"$topic":{"0":$ofs}}""" else "earliest"
+  val dir = spark.conf.get("spark.filter.output_dir_prefix")
 
 val offset = spark.conf.get("spark.filter.offset")
-offset = if (offset != "ealiest") {
+val offset = if (offset != "earliest") {
   offset = s"""{"$topic":{"0":$offset}}"""
 }
-
-  val dir = spark.conf.get("spark.filter.output_dir_prefix")
 
   val kafkaParams = Map(
     "kafka.bootstrap.servers" -> "spark-master-1:6667",
