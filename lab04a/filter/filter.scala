@@ -14,7 +14,10 @@ object filter {
  
     val topic = spark.conf.get("spark.filter.topic_name") 
     val offset = if(ofs != "earliest") s"""{"$topic":{"0":$ofs}}""" else "earliest" 
-    val dir = spark.conf.get("spark.filter.output_dir_prefix") 
+    val dir2 = spark.conf.get("spark.filter.output_dir_prefix") 
+    val dir = file:///user/timofey.melnikov/visits2
+
+visits2
  
  
     val kafkaParams = Map( 
