@@ -53,6 +53,6 @@ object filter {
     dfView.write.format("json").mode("overwrite").partitionBy("p_date").save(dir + "/view") 
     dfBuy.write.format("json").mode("overwrite").partitionBy("p_date").save(dir + "/buy") 
  
-    //spark.stop() 
+    spark.stop() 
   } 
 }
