@@ -50,8 +50,8 @@ object filter {
     val dfView = parsed.filter('event_type === "view") 
     val dfBuy = parsed.filter('event_type === "buy") 
  
-    dfView.write.format("json").mode("overwrite").partitionBy("p_date").save(dir + "/view") 
-    dfBuy.write.format("json").mode("overwrite").partitionBy("p_date").save(dir + "/buy") 
+    dfView.write.format("json").mode("overwrite").partitionBy("p_date").save(dir + "2" + "/view") 
+    dfBuy.write.format("json").mode("overwrite").partitionBy("p_date").save(dir + "2" + "/buy") 
  
     spark.stop() 
   } 
