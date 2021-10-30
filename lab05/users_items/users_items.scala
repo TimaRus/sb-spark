@@ -61,10 +61,10 @@ object users_items {
       val df_old = spark.read.schema(df.schema).json(out_dir + "/*") 
  
       df_old.union(df).write.format("parquet").mode("overwrite").save(out_dir + "/" + dt_max.toString)
-                                                                      //+ "20200430/") 
+
     } 
  
-    //spark.stop 
+    spark.stop 
  
   } 
 } 
