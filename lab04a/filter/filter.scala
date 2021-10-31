@@ -6,6 +6,7 @@ object filter {
     val spark = SparkSession 
       .builder() 
       .appName("lab04a") 
+      .config("spark.sql.session.timeZone", "UTC") 
       .getOrCreate() 
  
     import spark.implicits._ 
